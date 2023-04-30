@@ -153,14 +153,4 @@ mysql> SELECT * FROM bookmaker;
 ```
 
 
-```bash
-[root@slave ~]# cat /var/lib/mysql/mysql-bin.000001 
-_bin�fNdw{5.7.41-44-log�fNd8
 
-
-**49E��fNd#��d4�B�gNd!A�+�2�W��[RTMw�(B`a�gNdI$
- �Ustd!!
-       �betBEGIN-)��gNd�
- �Ustd!!
-       �betINSERT INTO bookmaker (id,bookmaker_name) VALUES(1,'1xbet')����gNd���P!A
- ```
