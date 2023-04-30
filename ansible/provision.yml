@@ -1,0 +1,148 @@
+---
+- name: Replication set up
+  hosts: all
+  become: true
+  vars_files:
+    - defaults/main.yml
+  tasks:
+    - name: Install Percona rpm from a remote repo
+      ansible.builtin.yum:
+        name: https://repo.percona.com/yum/percona-release-latest.noarch.rpm
+        state: present
+
+    - name: Install Percona server
+      ansible.builtin.yum:
+        name:
+          - Percona-Server-server-57
+          - MySQL-python
+        state: present
+
+    - name: Copy configuration files
+      ansible.builtin.copy:
+        src: templates/{{ item }}
+        dest: /etc/my.cnf.d/{{ item }}
+        owner: root
+        group: root
+        mode: '0644'
+      with_items:
+        - 02-max-connections.cnf
+        - 03-performance.cnf
+        - 04-slow-query.cnf
+    
+    - name: Copy configuration files
+      ansible.builtin.template:
+        src: templates/{{ item.src }}
+        dest: /etc/my.cnf.d/{{ item.dest }}
+        owner: root
+        group: root
+        mode: '0644'
+      with_items:
+        - { src: 01-base.cnf.j2, dest: 01-base.cnf }
+        - { src: 05-binlog.cnf.j2, dest: 05-binlog.cnf }
+
+    - name: Enable mysql
+      ansible.builtin.systemd:
+        name: mysqld
+        state: restarted
+        enabled: true
+
+    - name: Get default temporary root password
+      ansible.builtin.shell: "cat /var/log/mysqld.log | grep 'root@localhost:' | awk '{print $11}'"
+      register: mysql_temp_password
+
+    - name: Update root password
+      ansible.builtin.command: mysql --user root --password={{ mysql_temp_password.stdout }} --connect-expired-password --execute="ALTER USER 'root'@'localhost' IDENTIFIED BY '{{ mysql_root_password }}';"
+
+    - name: Configure Master Server
+      when: (inventory_hostname == "master")
+      block:
+        - name: Create new database
+          community.mysql.mysql_db:
+            login_user: root
+            login_password: "{{ mysql_root_password }}"
+            name: bet
+            state: present
+      
+        - name: Copy database dump file
+          ansible.builtin.copy:
+            src: bet.dmp
+            dest: /vagrant/bet.dmp
+            
+      
+        - name: Restore database
+          community.mysql.mysql_db:
+            login_user: root
+            login_password: "{{ mysql_root_password }}"
+            name: bet
+            state: import
+            target: /vagrant/bet.dmp
+
+        - name: Create mysql client user for replication
+          community.mysql.mysql_user:
+            login_user: root
+            login_password: "{{ mysql_root_password }}"
+            name: "{{ mysql_user }}"
+            password: "{{ mysql_user_password }}"
+            priv: '*.*:REPLICATION SLAVE'
+            state: present
+            host: '%'
+    
+        - name: Dump database
+          community.mysql.mysql_db:
+            login_user: root
+            login_password: "{{ mysql_root_password }}"
+            state: dump
+            name: all
+            target: /vagrant/master.sql
+            master_data: 2
+            ignore_tables:
+              - bet.events_on_demand
+              - bet.v_same_event
+            dump_extra_args: --triggers --routines
+
+        - name: Copy dump to localhost
+          ansible.builtin.fetch:
+            src: /vagrant/master.sql
+            dest: /tmp/master.sql
+            flat: true
+
+    - name: Configure Master Server
+      when: (inventory_hostname == "slave")
+      block:
+        - name: Copy database dump file
+          ansible.builtin.copy:
+            src: /tmp/master.sql
+            dest: /tmp/master.sql
+
+        - name: Reset master to avoid ERROR 1840
+          community.mysql.mysql_replication:
+            login_user: root
+            login_password: "{{ mysql_root_password }}"
+            mode: resetprimary    
+      
+        - name: Restore database
+          community.mysql.mysql_db:
+            login_user: root
+            login_password: "{{ mysql_root_password }}"
+            name: all
+            state: import
+            target: /tmp/master.sql
+
+        - name: configure replication on the slave
+          community.mysql.mysql_replication:
+            login_user: root
+            login_password: "{{ mysql_root_password }}"
+            mode: changeprimary
+            primary_host: "{{ master_ip }}"
+            primary_user: '{{ mysql_user }}'
+            primary_password: '{{ mysql_user_password }}'
+            primary_port: 3306
+            primary_auto_position: true
+
+        - name: start replication
+          community.mysql.mysql_replication:
+            login_user: root
+            login_password: "{{ mysql_root_password }}"
+            mode: startreplica
+
+...

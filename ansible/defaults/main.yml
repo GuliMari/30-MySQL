@@ -1,0 +1,8 @@
+---
+
+mysql_root_password: mySQL!@#456
+
+mysql_user: repl
+mysql_user_password: mySQL1@#$56
+
+master_ip: 192.168.56.150
